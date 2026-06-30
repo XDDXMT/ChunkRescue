@@ -25,16 +25,21 @@ import org.bukkit.event.world.ChunkUnloadEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.Comparator;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class RuntimeMonitor implements Listener {
     private final JavaPlugin plugin;
@@ -43,6 +48,8 @@ public final class RuntimeMonitor implements Listener {
     private final Map<ChunkKey, ChunkCounters> counters = new ConcurrentHashMap<>();
     private final Map<ChunkKey, Long> loadedChunks = new ConcurrentHashMap<>();
     private final Map<String, RecentPlayerChunk> recentPlayerChunks = new ConcurrentHashMap<>();
+    private final Map<ChunkKey, MarkState> markStates = new ConcurrentHashMap<>();
+    private final AtomicBoolean runtimeCriticalStopping = new AtomicBoolean(false);
     private ScheduledExecutorService executor;
 
     public RuntimeMonitor(JavaPlugin plugin, RescueConfig config, SuspectStore suspectStore) {
@@ -203,6 +210,10 @@ public final class RuntimeMonitor implements Listener {
     }
 
     private void flush() {
+        long now = System.currentTimeMillis();
+        int newSuspectsThisFlush = 0;
+        int maxNewSuspects = config.runtimeMaxNewSuspectsPerFlush();
+
         for (Map.Entry<ChunkKey, ChunkCounters> entry : counters.entrySet()) {
             ChunkCounters.Snapshot s = entry.getValue().snapshotThenReset();
             String reason = detectReason(s);
@@ -210,34 +221,139 @@ public final class RuntimeMonitor implements Listener {
 
             RescueAction action = actionFor(reason);
             ChunkKey key = entry.getKey();
-            List<String> evidence = new ArrayList<>();
-            evidence.add("entitySpawns=" + s.entitySpawns());
-            evidence.add("tntMinecartSpawns=" + s.tntMinecartSpawns());
-            evidence.add("fallingBlockSpawns=" + s.fallingBlockSpawns());
-            evidence.add("itemSpawns=" + s.itemSpawns());
-            evidence.add("pistonEvents=" + s.pistonEvents());
-            evidence.add("redstoneEvents=" + s.redstoneEvents());
-            evidence.add("dispenserEvents=" + s.dispenserEvents());
-            evidence.add("explosionEvents=" + s.explosionEvents());
+            List<String> evidence = evidenceFor(s);
 
-            Suspect suspect = new Suspect(
-                "auto_" + Instant.now().toEpochMilli() + "_" + UUID.randomUUID().toString().substring(0, 8),
-                key.world(),
-                key.chunkX(),
-                key.chunkZ(),
-                config.machineRadiusChunks(),
-                reason,
-                action,
-                Instant.now(),
-                evidence
-            );
-            try {
-                suspectStore.add(suspect);
-                plugin.getLogger().severe("[ChunkRescue] Marked suspect chunk " + key.compact() + " reason=" + reason + " action=" + action);
-            } catch (IOException e) {
-                plugin.getLogger().warning("[ChunkRescue] Failed to save suspect: " + e.getMessage());
+            MarkState state = markStates.computeIfAbsent(key, ignored -> new MarkState());
+            int recentCriticalRepeats = state.recordHit(reason, now, config.runtimeCriticalWindowSeconds());
+
+            boolean canAdd = newSuspectsThisFlush < maxNewSuspects && shouldAddNewSuspect(state, now);
+            if (canAdd) {
+                Suspect suspect = new Suspect(
+                    "auto_" + Instant.now().toEpochMilli() + "_" + UUID.randomUUID().toString().substring(0, 8),
+                    key.world(),
+                    key.chunkX(),
+                    key.chunkZ(),
+                    config.machineRadiusChunks(),
+                    reason,
+                    action,
+                    Instant.now(),
+                    evidence
+                );
+                try {
+                    suspectStore.add(suspect);
+                    state.lastMarkedMillis = now;
+                    state.totalMarks++;
+                    newSuspectsThisFlush++;
+                    logNewSuspect(key, reason, action, state.totalMarks);
+                } catch (IOException e) {
+                    plugin.getLogger().warning("[ChunkRescue] Failed to save suspect: " + e.getMessage());
+                }
+            } else {
+                state.duplicateSuppressed++;
+                logDuplicateIfNeeded(key, reason, state);
             }
+
+            maybeRuntimeCriticalStop(key, reason, action, recentCriticalRepeats, evidence);
         }
+    }
+
+    private List<String> evidenceFor(ChunkCounters.Snapshot s) {
+        List<String> evidence = new ArrayList<>();
+        evidence.add("entitySpawns=" + s.entitySpawns());
+        evidence.add("tntMinecartSpawns=" + s.tntMinecartSpawns());
+        evidence.add("fallingBlockSpawns=" + s.fallingBlockSpawns());
+        evidence.add("itemSpawns=" + s.itemSpawns());
+        evidence.add("pistonEvents=" + s.pistonEvents());
+        evidence.add("redstoneEvents=" + s.redstoneEvents());
+        evidence.add("dispenserEvents=" + s.dispenserEvents());
+        evidence.add("explosionEvents=" + s.explosionEvents());
+        evidence.add("runtimeFlushIntervalSeconds=" + config.runtimeFlushIntervalSeconds());
+        return evidence;
+    }
+
+    private boolean shouldAddNewSuspect(MarkState state, long now) {
+        if (!config.runtimeDedupeEnabled()) return true;
+        if (state.lastMarkedMillis <= 0L) return true;
+        return now - state.lastMarkedMillis >= TimeUnit.SECONDS.toMillis(config.runtimeDuplicateCooldownSeconds());
+    }
+
+    private void logNewSuspect(ChunkKey key, String reason, RescueAction action, int marks) {
+        String msg = "[ChunkRescue] Marked suspect chunk " + key.compact()
+            + " reason=" + reason + " action=" + action + " marks=" + marks;
+        String level = config.runtimeNewSuspectLogLevel().toUpperCase(java.util.Locale.ROOT);
+        if ("SEVERE".equals(level) || "ERROR".equals(level)) plugin.getLogger().severe(msg);
+        else if ("INFO".equals(level)) plugin.getLogger().info(msg);
+        else plugin.getLogger().warning(msg);
+    }
+
+    private void logDuplicateIfNeeded(ChunkKey key, String reason, MarkState state) {
+        if (!config.runtimeLogDuplicateMarks()) return;
+        if (state.duplicateSuppressed % config.runtimeDuplicateLogEvery() != 0) return;
+        plugin.getLogger().warning("[ChunkRescue] Suppressed duplicate suspect mark " + key.compact()
+            + " reason=" + reason + " duplicateSuppressed=" + state.duplicateSuppressed);
+    }
+
+    private void maybeRuntimeCriticalStop(ChunkKey key, String reason, RescueAction action, int recentRepeats, List<String> evidence) {
+        if (!config.runtimeCriticalStopEnabled()) return;
+        Set<String> criticalReasons = config.runtimeCriticalReasons();
+        if (!criticalReasons.contains(reason.toUpperCase(java.util.Locale.ROOT))) return;
+        if (recentRepeats < config.runtimeCriticalRepeatsToTrigger()) return;
+        if (!runtimeCriticalStopping.compareAndSet(false, true)) return;
+
+        try {
+            // Ensure at least one fresh suspect exists with the final trigger evidence.
+            Suspect suspect = new Suspect(
+                "critical_" + Instant.now().toEpochMilli() + "_" + UUID.randomUUID().toString().substring(0, 8),
+                key.world(), key.chunkX(), key.chunkZ(), config.machineRadiusChunks(),
+                "RUNTIME_CRITICAL_" + reason, action, Instant.now(), evidence
+            );
+            suspectStore.add(suspect);
+        } catch (IOException e) {
+            plugin.getLogger().warning("[ChunkRescue] Failed to save runtime critical suspect: " + e.getMessage());
+        }
+
+        if (config.runtimeCriticalForceStartupRescue()) {
+            writeForceStartupRescueFlag("RUNTIME_CRITICAL_" + reason, key.compact() + " r=" + config.machineRadiusChunks());
+        }
+
+        if (config.runtimeCriticalShutdownOnTrigger()) {
+            plugin.getLogger().severe("[ChunkRescue] Runtime critical detector triggered: " + key.compact()
+                + " reason=" + reason + " repeats=" + recentRepeats + "/" + config.runtimeCriticalRepeatsToTrigger()
+                + ". Requesting shutdown.");
+            try {
+                plugin.getServer().shutdown();
+            } catch (Throwable t) {
+                plugin.getLogger().warning("[ChunkRescue] Runtime critical Bukkit.shutdown failed: " + t.getMessage());
+            }
+            Thread killer = new Thread(() -> {
+                try {
+                    Thread.sleep(config.gracefulWaitSeconds() * 1000L);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+                if (config.forceHalt()) Runtime.getRuntime().halt(config.haltExitCode());
+            }, "ChunkRescue-RuntimeCritical-Halt");
+            killer.setDaemon(false);
+            killer.start();
+        }
+    }
+
+    private void writeForceStartupRescueFlag(String reason, String target) {
+        try {
+            Path state = plugin.getDataFolder().toPath().resolve("runtime-state");
+            Files.createDirectories(state);
+            Files.writeString(state.resolve("force-startup-rescue.flag"),
+                "createdAt: \"" + Instant.now() + "\"\n"
+                    + "reason: \"" + escapeYaml(reason) + "\"\n"
+                    + "target: \"" + escapeYaml(target) + "\"\n",
+                StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            plugin.getLogger().warning("[ChunkRescue] Failed to write force-startup-rescue.flag: " + e.getMessage());
+        }
+    }
+
+    private String escapeYaml(String s) {
+        return s == null ? "" : s.replace("\\", "\\\\").replace("\"", "'");
     }
 
     private String detectReason(ChunkCounters.Snapshot s) {
@@ -261,5 +377,26 @@ public final class RuntimeMonitor implements Listener {
     }
 
     private record RecentPlayerChunk(ChunkKey key, long lastSeenMillis) { }
+
+    private static final class MarkState {
+        long lastMarkedMillis;
+        int totalMarks;
+        long duplicateSuppressed;
+        String lastReason = "";
+        long windowStartMillis;
+        int repeatsInWindow;
+
+        int recordHit(String reason, long now, int windowSeconds) {
+            long windowMs = TimeUnit.SECONDS.toMillis(Math.max(1, windowSeconds));
+            if (!reason.equals(lastReason) || windowStartMillis <= 0L || now - windowStartMillis > windowMs) {
+                lastReason = reason;
+                windowStartMillis = now;
+                repeatsInWindow = 1;
+            } else {
+                repeatsInWindow++;
+            }
+            return repeatsInWindow;
+        }
+    }
 
 }

@@ -1,6 +1,6 @@
 name: ChunkRescue
 main: dev.chunkrescue.ChunkRescuePlugin
-version: 0.2.0-mvp
+version: 0.2.1-mvp
 api-version: '26.1.2'
 load: STARTUP
 folia-supported: true

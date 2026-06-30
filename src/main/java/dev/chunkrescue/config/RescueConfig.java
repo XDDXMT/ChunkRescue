@@ -25,6 +25,32 @@ public final class RescueConfig {
     public boolean runtimeMonitorEnabled() { return config.getBoolean("runtime-monitor.enabled", true); }
     public int runtimeFlushIntervalSeconds() { return Math.max(1, config.getInt("runtime-monitor.flush-interval-seconds", 10)); }
 
+    public boolean runtimeDedupeEnabled() { return config.getBoolean("runtime-monitor.marking.dedupe-enabled", true); }
+    public int runtimeDuplicateCooldownSeconds() { return Math.max(0, config.getInt("runtime-monitor.marking.duplicate-cooldown-seconds", 300)); }
+    public boolean runtimeLogDuplicateMarks() { return config.getBoolean("runtime-monitor.marking.log-duplicate-marks", false); }
+    public int runtimeDuplicateLogEvery() { return Math.max(1, config.getInt("runtime-monitor.marking.duplicate-log-every", 12)); }
+    public int runtimeMaxNewSuspectsPerFlush() { return Math.max(1, config.getInt("runtime-monitor.marking.max-new-suspects-per-flush", 16)); }
+    public String runtimeNewSuspectLogLevel() { return config.getString("runtime-monitor.marking.new-suspect-log-level", "WARNING"); }
+
+    public boolean runtimeCriticalStopEnabled() { return config.getBoolean("runtime-monitor.critical-stop.enabled", true); }
+    public int runtimeCriticalRepeatsToTrigger() { return Math.max(1, config.getInt("runtime-monitor.critical-stop.repeats-to-trigger", 3)); }
+    public int runtimeCriticalWindowSeconds() { return Math.max(5, config.getInt("runtime-monitor.critical-stop.window-seconds", 60)); }
+    public boolean runtimeCriticalForceStartupRescue() { return config.getBoolean("runtime-monitor.critical-stop.force-startup-rescue", true); }
+    public boolean runtimeCriticalShutdownOnTrigger() { return config.getBoolean("runtime-monitor.critical-stop.shutdown-on-trigger", true); }
+    public java.util.Set<String> runtimeCriticalReasons() {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        for (String value : config.getStringList("runtime-monitor.critical-stop.reasons")) {
+            if (value != null && !value.isBlank()) out.add(value.trim().toUpperCase(java.util.Locale.ROOT));
+        }
+        if (out.isEmpty()) {
+            out.add("EXPLOSION_STORM");
+            out.add("TNT_MINECART_MACHINE");
+            out.add("TOO_MANY_ENTITIES");
+            out.add("FALLING_BLOCK_MACHINE");
+        }
+        return java.util.Collections.unmodifiableSet(out);
+    }
+
     public int thresholdEntitySpawns() { return config.getInt("runtime-monitor.suspect-thresholds.entity-spawns-per-10s", 5000); }
     public int thresholdTntMinecartSpawns() { return config.getInt("runtime-monitor.suspect-thresholds.tnt-minecart-spawns-per-10s", 200); }
     public int thresholdFallingBlockSpawns() { return config.getInt("runtime-monitor.suspect-thresholds.falling-block-spawns-per-10s", 1000); }

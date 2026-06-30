@@ -141,3 +141,10 @@ On Windows you can install Temurin JDK 25 with:
 ```powershell
 winget install EclipseAdoptium.Temurin.25.JDK
 ```
+
+
+## 0.2.1
+
+- Added runtime suspect dedupe/cooldown to prevent repeated suspect spam for the same chunk.
+- Added runtime critical-stop path: repeated critical reasons can write force-startup-rescue.flag and stop the JVM.
+- Runtime suspect logs are WARNING by default instead of SEVERE spam.

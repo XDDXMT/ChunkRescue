@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "dev.chunkrescue"
-version = "0.2.0-mvp"
+version = "0.2.1-mvp"
 
 repositories {
     mavenCentral()

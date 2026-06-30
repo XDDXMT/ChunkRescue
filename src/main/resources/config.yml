@@ -36,6 +36,30 @@ runtime-monitor:
   enabled: true
   flush-interval-seconds: 10
 
+  # Prevents the same still-running machine from writing the same suspect every flush.
+  marking:
+    dedupe-enabled: true
+    duplicate-cooldown-seconds: 300
+    log-duplicate-marks: false
+    duplicate-log-every: 12
+    max-new-suspects-per-flush: 16
+    new-suspect-log-level: WARNING
+
+  # Runtime critical detector.
+  # If the same chunk keeps tripping a critical reason, write force-startup-rescue.flag
+  # and stop the server so startup-rescue can remove the broken machine before it is loaded again.
+  critical-stop:
+    enabled: true
+    repeats-to-trigger: 3
+    window-seconds: 60
+    force-startup-rescue: true
+    shutdown-on-trigger: true
+    reasons:
+      - EXPLOSION_STORM
+      - TNT_MINECART_MACHINE
+      - TOO_MANY_ENTITIES
+      - FALLING_BLOCK_MACHINE
+
   suspect-thresholds:
     entity-spawns-per-10s: 5000
     tnt-minecart-spawns-per-10s: 200
