@@ -1,0 +1,20 @@
+danger-blocks:
+  - minecraft:tnt
+  - minecraft:piston
+  - minecraft:sticky_piston
+  - minecraft:moving_piston
+  - minecraft:observer
+  - minecraft:dispenser
+  - minecraft:dropper
+  - minecraft:hopper
+  - minecraft:redstone_wire
+  - minecraft:repeater
+  - minecraft:comparator
+  - minecraft:rail
+  - minecraft:powered_rail
+  - minecraft:activator_rail
+  - minecraft:detector_rail
+  - minecraft:slime_block
+  - minecraft:honey_block
+  - minecraft:crafter
+  - minecraft:sculk_sensor

@@ -1,0 +1,157 @@
+startup-rescue:
+  enabled: true
+  only-after-unclean-shutdown: true
+  backup-required: true
+  verify-backup-sha256: true
+  refuse-if-world-loaded: true
+
+  # MVP implements: DELETE_CHUNKS_REGENERATE, PURGE_REGION_ENTITIES, DELETE_REGION_REGENERATE, STOP_SERVER
+  # Reserved for later: PURGE_ENTITIES_ONLY, DISABLE_MACHINE_BLOCKS, SAFE_VOID_CHUNK
+  default-action: DELETE_CHUNKS_REGENERATE
+
+  machine-radius-chunks: 3
+  max-chunks-per-boot: 256
+
+  # MVP supports vanilla Anvil .mca region format only.
+  # Lophine/Luminol may also support linear/b_linear storage; those are intentionally fail-closed here.
+  storage-format: ANVIL_MCA_ONLY
+
+# Optional path overrides for unusual world folder layouts.
+# Key = Bukkit/Paper world identifier stored in suspects.yml.
+# Value = folder path relative to server root, or an absolute path.
+# In Minecraft/Paper 26.1+, it may point either to the save root, e.g. "world",
+# or directly to a dimension data folder, e.g. "world/dimensions/minecraft/overworld".
+# Example:
+# world-path-overrides:
+#   world: "world"
+#   world_nether: "world/dimensions/minecraft/the_nether"
+#   world_the_end: "world/dimensions/minecraft/the_end"
+world-path-overrides: {}
+
+backup:
+  folder: "plugins/ChunkRescue/backups"
+  keep-days: 14
+
+runtime-monitor:
+  enabled: true
+  flush-interval-seconds: 10
+
+  suspect-thresholds:
+    entity-spawns-per-10s: 5000
+    tnt-minecart-spawns-per-10s: 200
+    falling-block-spawns-per-10s: 1000
+    item-spawns-per-10s: 10000
+    piston-events-per-10s: 5000
+    redstone-events-per-10s: 12000
+    dispenser-events-per-10s: 3000
+    explosion-events-per-10s: 200
+
+  auto-mark-action:
+    too-many-entities: DELETE_CHUNKS_REGENERATE
+    tnt-machine: DELETE_CHUNKS_REGENERATE
+    piston-redstone-machine: DELETE_CHUNKS_REGENERATE
+    unknown-heavy-machine: DELETE_CHUNKS_REGENERATE
+
+console-command-sanitizer:
+  # Console commands normally should not start with '/'.
+  # Some Folia/Folia-downstream builds can NPE on slash-prefixed console commands
+  # because the console CommandSourceStack has no world/level.
+  enabled: true
+
+  # false = strip leading slash from any console command, e.g. /stop -> stop
+  # true  = only strip commands listed below
+  only-known-problematic-commands: false
+
+  log-rewrite: true
+
+  problematic-commands:
+    - stop
+    - version
+    - ver
+    - about
+    - plugins
+    - pl
+
+dedicated-watchdog-thread:
+  enabled: true
+  thread-name: "ChunkRescue-Dedicated-Watchdog"
+  priority: 7
+  daemon: false
+  halt-on-thread-crash: true
+  halt-exit-code-on-thread-crash: 138
+
+hard-stop-watchdog:
+  enabled: true
+
+  # Global scheduler deadlock guard. This catches full/global stalls.
+  no-global-heartbeat-timeout-seconds: 30
+
+  # Parses FoliaWatchdogThread reports from logs/latest.log.
+  # This catches region stalls even when the global scheduler is still alive.
+  region-log-watchdog:
+    enabled: true
+    log-path: "logs/latest.log"
+    consecutive-reports-to-trigger: 2
+    total-reports-to-trigger: 3
+    max-suspects-per-trigger: 4
+    window-seconds: 60
+    min-reported-seconds: 5.0
+    suspect-radius-chunks: 3
+    action-on-next-boot: DELETE_CHUNKS_REGENERATE
+    force-startup-rescue: true
+    shutdown-on-trigger: true
+
+  # Parses Lophine/Folia Server Health Report blocks.
+  # Example: Lowest Region TPS 0.35 / 2516 mspt / 22,232 entities.
+  health-report-watchdog:
+    enabled: true
+    lowest-region-tps-to-trigger: 1.0
+    region-mspt-to-trigger: 1000.0
+    region-entities-to-trigger: 10000
+    suspect-radius-chunks: 3
+    action-on-next-boot: DELETE_CHUNKS_REGENERATE
+    force-startup-rescue: true
+    shutdown-on-trigger: true
+
+    # Lophine health report prints block-like coordinates in your logs, e.g. world (-393, 183).
+    # BLOCK converts them to chunk coords with floorDiv(x,16). Use CHUNK only if your fork prints chunk coords.
+    coordinate-mode: BLOCK
+
+  # Active probe watchdog. It schedules tiny no-op tasks into tracked loaded chunks.
+  # If many probes do not come back, that means a loaded tick region is effectively stuck.
+  region-probe-watchdog:
+    enabled: true
+    interval-seconds: 5
+    timeout-seconds: 20
+    max-probes-per-cycle: 512
+    timed-out-probes-to-trigger: 8
+    suspect-radius-chunks: 3
+    prefer-recent-player-chunks: true
+    recent-player-chunk-seconds: 120
+    max-suspects-per-trigger: 4
+    action-on-next-boot: DELETE_CHUNKS_REGENERATE
+    force-startup-rescue: true
+    shutdown-on-trigger: true
+
+  graceful-shutdown-first: true
+  graceful-wait-seconds: 10
+  force-halt: true
+  halt-exit-code: 137
+
+  before-stop:
+    write-crash-marker: true
+    flush-suspects: true
+    create-thread-dump: true
+
+safety:
+  stop-server-if-journal-dirty: true
+  stop-server-if-backup-failed: true
+  write-human-report: true
+
+
+test-tools:
+  # DANGEROUS: only enable on a copied test server.
+  # Provides /chunkrescue debug commands for testing watchdog/hard-stop behavior
+  # and queued startup-rescue reset tests.
+  enabled: false
+  max-debug-freeze-seconds: 120

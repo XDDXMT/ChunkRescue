@@ -1,0 +1,8 @@
+.gradle/
+build/
+out/
+*.iml
+.idea/
+run/
+plugins/ChunkRescue/backups/
+plugins/ChunkRescue/runtime-state/

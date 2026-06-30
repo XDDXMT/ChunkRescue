@@ -1,0 +1,19 @@
+name: ChunkRescue
+main: dev.chunkrescue.ChunkRescuePlugin
+version: 0.2.0-mvp
+api-version: '26.1.2'
+load: STARTUP
+folia-supported: true
+description: Startup chunk rescue and hard-stop watchdog for Folia and Folia downstreams.
+authors: ["ChunkRescue Contributors"]
+
+commands:
+  chunkrescue:
+    aliases: [crs]
+    description: Manage ChunkRescue suspects and status.
+    usage: /chunkrescue <status|suspect|debug|reload>
+    permission: chunkrescue.admin
+
+permissions:
+  chunkrescue.admin:
+    default: op
